@@ -3,6 +3,8 @@
 Handles communication with the LLM backend (e.g., AskBosch / OpenAI-compatible API).
 """
 
+from __future__ import annotations
+
 from typing import Any
 
 from loguru import logger
@@ -16,7 +18,9 @@ class LLMInterface:
         self._model = llm_config.get("model_name", "gpt-4-turbo")
         self._temperature = llm_config.get("temperature", 0.7)
         self._max_tokens = llm_config.get("max_tokens", 2000)
-        self._client = OpenAI()  # Uses OPENAI_API_KEY or BOSCH_ASKBOSCH_API_KEY from env
+        self._client = (
+            OpenAI()
+        )  # Uses OPENAI_API_KEY or BOSCH_ASKBOSCH_API_KEY from env
         logger.info(f"LLMInterface initialized with model={self._model}")
 
     def chat(self, messages: list[dict[str, str]], **kwargs: Any) -> str:
@@ -61,5 +65,6 @@ class LLMInterface:
         if tool_call:
             fc = tool_call[0].function
             import json
+
             return {"tool_name": fc.name, "arguments": json.loads(fc.arguments)}
         return {"tool_name": None, "arguments": {}}

@@ -3,6 +3,8 @@
 Coordinates the overall workflow: task planning, tool invocation, and human review loops.
 """
 
+from __future__ import annotations
+
 from typing import Any
 
 from loguru import logger

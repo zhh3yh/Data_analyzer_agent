@@ -4,6 +4,8 @@ Wraps the ByteSoup data converter for transforming raw measurement files
 into MAT format suitable for analysis and PlotStr visualization.
 """
 
+from __future__ import annotations
+
 import subprocess
 from pathlib import Path
 

@@ -3,6 +3,8 @@
 Wraps the Windows robocopy.exe utility for bulk file/directory copying.
 """
 
+from __future__ import annotations
+
 import subprocess
 from pathlib import Path
 

@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from .agent_orchestrator import AgentOrchestrator
 from .human_interaction import HumanInteractionHandler
 from .llm_interface import LLMInterface

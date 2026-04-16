@@ -22,6 +22,8 @@ PlotStr CLI modes (from parseInputs.m):
   PlotStr('--help')
 """
 
+from __future__ import annotations
+
 import json
 import multiprocessing as mp
 import os
@@ -33,10 +35,16 @@ import scipy.io as sio
 from loguru import logger
 from pydantic import BaseModel, Field
 
+try:
+    import h5py
+except ImportError:
+    h5py = None  # type: ignore[assignment]
+
 
 # ---------------------------------------------------------------------------
 # Configuration
 # ---------------------------------------------------------------------------
+
 
 class PlotStrConfig(BaseModel):
     """Configuration model for the PlotStr tool."""
@@ -72,7 +80,7 @@ class PlotStrConfig(BaseModel):
     config_dir: str = Field(
         default="",
         description="Path to a PlotStr JSON config (birdseye/signals/bartender). "
-                    "If empty, PlotStr uses its built-in config/default.json.",
+        "If empty, PlotStr uses its built-in config/default.json.",
     )
     max_parallel_jobs: int = Field(
         default=4,
@@ -85,7 +93,7 @@ class PlotStrConfig(BaseModel):
     signal_generator_path: str = Field(
         default="",
         description="Path to +CustomSignals folder for derived signal generation. "
-                    "If empty, defaults to <plotstr_root>/+CustomSignals/.",
+        "If empty, defaults to <plotstr_root>/+CustomSignals/.",
     )
     seven_zip_path: str = Field(
         default="7z",
@@ -123,6 +131,114 @@ class PlotStrWrapper:
             f"matlab={config.matlab_executable})."
         )
 
+    # ------------------------------------------------------------------
+    # Internal MAT file loader (supports v5 via scipy and v7.3 via h5py)
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _load_mat_hdf5(mat_path: Path) -> dict[str, Any]:
+        """Load a MATLAB v7.3 (HDF5) MAT file using h5py.
+
+        Returns a dict mimicking scipy.io.loadmat output: top-level keys
+        map to HDF5 groups (treated as struct-like objects).
+        """
+        if h5py is None:
+            raise ImportError(
+                "h5py is required to read MATLAB v7.3 files. "
+                "Install it with: pip install h5py"
+            )
+        return h5py.File(str(mat_path), "r")
+
+    @staticmethod
+    def _is_hdf5(mat_path: Path) -> bool:
+        """Return True if the file is HDF5 (MATLAB v7.3).
+
+        MATLAB v7.3 files start with 'MATLAB 7.3 MAT-file' in the header
+        but use HDF5 internally. We check for both the MATLAB header marker
+        and the standard HDF5 magic bytes (which appear at offset 512).
+        """
+        with open(mat_path, "rb") as f:
+            header = f.read(20)
+            if b"MATLAB 7.3" in header:
+                return True
+            # Also check standard HDF5 magic at offset 0
+            return header[:8] == b"\x89HDF\r\n\x1a\n"
+
+    def _load_mat(self, mat_path: Path) -> tuple[Any, bool]:
+        """Load a MAT file, auto-detecting v5 vs v7.3 format.
+
+        Returns:
+            (data, is_hdf5): The loaded data object and whether it's HDF5.
+            For v5: data is a dict from scipy.io.loadmat.
+            For v7.3: data is an h5py.File object (use data[key] to access groups).
+        """
+        if self._is_hdf5(mat_path):
+            return self._load_mat_hdf5(mat_path), True
+        return sio.loadmat(str(mat_path), squeeze_me=True), False
+
+    @staticmethod
+    def _hdf5_get_port_names(hf: Any) -> list[str]:
+        """Get port names from an HDF5 MAT file."""
+        ports = []
+        for key in hf.keys():
+            if key.startswith("#") or key.startswith("__") or key in _RESERVED_FIELDS:
+                continue
+            if isinstance(hf[key], h5py.Group):
+                ports.append(key)
+        return sorted(ports)
+
+    @staticmethod
+    def _hdf5_get_signal_names(hf: Any) -> list[str]:
+        """Recursively collect signal paths from an HDF5 MAT file."""
+        import numpy as np
+
+        signals = []
+
+        def _walk(group, prefix: str):
+            for key in group.keys():
+                item = group[key]
+                full = f"{prefix}.{key}" if prefix else key
+                if isinstance(item, h5py.Group):
+                    _walk(item, full)
+                elif isinstance(item, h5py.Dataset):
+                    signals.append(full)
+
+        for port_name in hf.keys():
+            if (
+                port_name.startswith("#")
+                or port_name.startswith("__")
+                or port_name in _RESERVED_FIELDS
+            ):
+                continue
+            obj = hf[port_name]
+            if isinstance(obj, h5py.Group):
+                for key in obj.keys():
+                    item = obj[key]
+                    if isinstance(item, h5py.Group):
+                        _walk(item, f"{port_name}.{key}")
+                    elif isinstance(item, h5py.Dataset):
+                        signals.append(f"{port_name}.{key}")
+        return sorted(signals)
+
+    @staticmethod
+    def _hdf5_resolve_signal(hf: Any, port_name: str, field_path: str) -> Any:
+        """Navigate an HDF5 group to resolve a dotted field path like 'm_objectDataList.m_dx.m_value'."""
+        import numpy as np
+
+        node = hf[port_name]
+        for part in field_path.split("."):
+            if isinstance(node, h5py.Group) and part in node:
+                node = node[part]
+            else:
+                raise KeyError(
+                    f"Field '{part}' not found under '{port_name}' (path: {field_path})"
+                )
+        if isinstance(node, h5py.Dataset):
+            return node[:]
+        raise KeyError(
+            f"Resolved path '{port_name}.{field_path}' is a group, not a dataset."
+        )
+
     # ==================================================================
     # 1. Distill — convert raw data to unified _distilled.mat
     # ==================================================================
@@ -158,7 +274,9 @@ class PlotStrWrapper:
 
         valid_formats = {"-mat", "-MF4", "-csv"}
         if data_format not in valid_formats:
-            raise ValueError(f"Invalid format '{data_format}'. Must be one of {valid_formats}.")
+            raise ValueError(
+                f"Invalid format '{data_format}'. Must be one of {valid_formats}."
+            )
 
         matlab_args = f"'--distill', '{data_format}', '{src.as_posix()}'"
         if target_folder:
@@ -199,10 +317,14 @@ class PlotStrWrapper:
             logger.warning(f"No {pattern} files found in {src}.")
             return []
 
-        logger.info(f"Parallel distillation: {len(files)} files, up to {self._cfg.max_parallel_jobs} workers.")
+        logger.info(
+            f"Parallel distillation: {len(files)} files, up to {self._cfg.max_parallel_jobs} workers."
+        )
         work_items = [(str(f.parent), f.name) for f in files]
 
-        with mp.Pool(processes=min(self._cfg.max_parallel_jobs, len(work_items))) as pool:
+        with mp.Pool(
+            processes=min(self._cfg.max_parallel_jobs, len(work_items))
+        ) as pool:
             results = pool.starmap(self._distill_single_file_worker, work_items)
         return results
 
@@ -334,9 +456,7 @@ class PlotStrWrapper:
     def export_signal_names(self, mat_file_path: str) -> list[str]:
         """Extract all signal names from a distilled MAT file.
 
-        Reads the file with ``scipy.io.loadmat`` and returns a sorted list
-        of ``PortName.SignalName`` strings (skipping reserved fields like
-        ``distillation``, ``bookmarks``, ``shotData``, ``Comment``).
+        Supports both MATLAB v5 (scipy) and v7.3 HDF5 (h5py) formats.
 
         Args:
             mat_file_path: Path to a ``_distilled.mat`` file.
@@ -351,21 +471,29 @@ class PlotStrWrapper:
         if not mat_path.is_file():
             raise FileNotFoundError(f"MAT file not found: {mat_path}")
 
-        data = sio.loadmat(str(mat_path), squeeze_me=True)
-        signals: list[str] = []
+        data, is_hdf5 = self._load_mat(mat_path)
+        try:
+            if is_hdf5:
+                signals = self._hdf5_get_signal_names(data)
+            else:
+                signals: list[str] = []
+                for port_name, port_val in data.items():
+                    if port_name.startswith("__") or port_name in _RESERVED_FIELDS:
+                        continue
+                    if hasattr(port_val, "dtype") and port_val.dtype.names:
+                        for sig_name in port_val.dtype.names:
+                            signals.append(f"{port_name}.{sig_name}")
+                signals.sort()
+        finally:
+            if is_hdf5:
+                data.close()
 
-        for port_name, port_val in data.items():
-            if port_name.startswith("__") or port_name in _RESERVED_FIELDS:
-                continue
-            if hasattr(port_val, "dtype") and port_val.dtype.names:
-                for sig_name in port_val.dtype.names:
-                    signals.append(f"{port_name}.{sig_name}")
-
-        signals.sort()
         logger.info(f"Exported {len(signals)} signal names from {mat_path.name}.")
         return signals
 
-    def export_signal_names_to_file(self, mat_file_path: str, output_path: str | None = None) -> str:
+    def export_signal_names_to_file(
+        self, mat_file_path: str, output_path: str | None = None
+    ) -> str:
         """Export signal names to a text file (one per line).
 
         Args:
@@ -377,7 +505,11 @@ class PlotStrWrapper:
         """
         signals = self.export_signal_names(mat_file_path)
         mat_p = Path(mat_file_path)
-        out = Path(output_path) if output_path else mat_p.with_name(f"{mat_p.stem}_signals.txt")
+        out = (
+            Path(output_path)
+            if output_path
+            else mat_p.with_name(f"{mat_p.stem}_signals.txt")
+        )
         out.write_text("\n".join(signals) + "\n", encoding="utf-8")
         logger.info(f"Signal names written to {out}")
         return str(out)
@@ -411,21 +543,34 @@ class PlotStrWrapper:
         parts = signal_name.split(".", 1)
         if len(parts) != 2:
             raise KeyError(f"Signal name must be 'Port.Signal', got: '{signal_name}'")
-        port_name, sig_name = parts
+        port_name, sig_path = parts
 
-        data = sio.loadmat(str(mat_path), squeeze_me=True)
-        if port_name not in data:
-            raise KeyError(f"Port '{port_name}' not found in {mat_path.name}.")
-
-        port = data[port_name]
-        if not hasattr(port, "dtype") or port.dtype.names is None:
-            raise KeyError(f"Port '{port_name}' is not a struct.")
-
-        if sig_name not in port.dtype.names:
-            raise KeyError(f"Signal '{sig_name}' not found in port '{port_name}'.")
-
-        time_data = port["time"].item() if "time" in port.dtype.names else None
-        signal_data = port[sig_name].item()
+        data, is_hdf5 = self._load_mat(mat_path)
+        try:
+            if is_hdf5:
+                if port_name not in data:
+                    raise KeyError(f"Port '{port_name}' not found in {mat_path.name}.")
+                time_data = (
+                    data[port_name]["time"][:].flatten()
+                    if "time" in data[port_name]
+                    else None
+                )
+                signal_data = self._hdf5_resolve_signal(data, port_name, sig_path)
+            else:
+                if port_name not in data:
+                    raise KeyError(f"Port '{port_name}' not found in {mat_path.name}.")
+                port = data[port_name]
+                if not hasattr(port, "dtype") or port.dtype.names is None:
+                    raise KeyError(f"Port '{port_name}' is not a struct.")
+                if sig_path not in port.dtype.names:
+                    raise KeyError(
+                        f"Signal '{sig_path}' not found in port '{port_name}'."
+                    )
+                time_data = port["time"].item() if "time" in port.dtype.names else None
+                signal_data = port[sig_path].item()
+        finally:
+            if is_hdf5:
+                data.close()
 
         return {"time": time_data, "values": signal_data}
 
@@ -535,7 +680,10 @@ class PlotStrWrapper:
         if not folder.is_dir():
             raise FileNotFoundError(f"Data folder not found: {folder}")
 
-        sig_gen = self._cfg.signal_generator_path or f"{self._root.as_posix()}/+CustomSignals/"
+        sig_gen = (
+            self._cfg.signal_generator_path
+            or f"{self._root.as_posix()}/+CustomSignals/"
+        )
         output_cmd = ""
         if output_dir:
             Path(output_dir).mkdir(parents=True, exist_ok=True)
@@ -633,13 +781,19 @@ class PlotStrWrapper:
         )
         return self._run_matlab(matlab_cmd, timeout=600)
 
-    def list_custom_signal_generators(self, custom_signals_path: str | None = None) -> list[str]:
+    def list_custom_signal_generators(
+        self, custom_signals_path: str | None = None
+    ) -> list[str]:
         """List available custom signal generator scripts.
 
         Returns:
             List of script names (without .m extension) organized by project namespace.
         """
-        base = Path(custom_signals_path) if custom_signals_path else (self._root / "+CustomSignals")
+        base = (
+            Path(custom_signals_path)
+            if custom_signals_path
+            else (self._root / "+CustomSignals")
+        )
         if not base.is_dir():
             return []
 
@@ -677,21 +831,33 @@ class PlotStrWrapper:
         if not mat_path.is_file():
             raise FileNotFoundError(f"MAT file not found: {mat_path}")
 
-        data = sio.loadmat(str(mat_path), squeeze_me=True)
-        if "bookmarks" not in data or data["bookmarks"].size == 0:
-            return []
+        data, is_hdf5 = self._load_mat(mat_path)
+        try:
+            if is_hdf5:
+                if "bookmarks" not in data or data["bookmarks"].size == 0:
+                    return []
+                bm = data["bookmarks"][:]
+            else:
+                if "bookmarks" not in data or data["bookmarks"].size == 0:
+                    return []
+                bm = data["bookmarks"]
+        finally:
+            if is_hdf5:
+                data.close()
 
-        bm = data["bookmarks"]
         result = []
-        # Handle both 1D (single bookmark) and 2D cases
         if bm.ndim == 1:
             bm = bm.reshape(1, -1)
         for row in bm:
-            result.append({
-                "category": int(row[0]) if hasattr(row[0], '__int__') else str(row[0]),
-                "text": str(row[1]),
-                "timestamp_ms": float(row[2]) if len(row) > 2 else 0.0,
-            })
+            result.append(
+                {
+                    "category": (
+                        int(row[0]) if hasattr(row[0], "__int__") else str(row[0])
+                    ),
+                    "text": str(row[1]),
+                    "timestamp_ms": float(row[2]) if len(row) > 2 else 0.0,
+                }
+            )
 
         logger.info(f"Read {len(result)} bookmarks from {mat_path.name}.")
         return result
@@ -716,6 +882,7 @@ class PlotStrWrapper:
             raise FileNotFoundError(f"MAT file not found: {mat_path}")
 
         import numpy as np
+
         if not bookmarks:
             bm_array = np.array([])
         else:
@@ -725,7 +892,13 @@ class PlotStrWrapper:
                 bm_array[i, 1] = str(bm["text"])
                 bm_array[i, 2] = str(bm["timestamp_ms"])
 
-        # Load existing data, update bookmarks, save back
+        # Load existing data, update bookmarks, save back.
+        # Note: write-back only supported for v5 MAT files (scipy).
+        if self._is_hdf5(mat_path):
+            raise NotImplementedError(
+                "Writing bookmarks to MATLAB v7.3 HDF5 files is not supported. "
+                "Use MATLAB directly or convert the file to v5 format first."
+            )
         data = sio.loadmat(str(mat_path))
         data["bookmarks"] = bm_array
         sio.savemat(str(mat_path), data, do_compression=True)
@@ -762,7 +935,9 @@ class PlotStrWrapper:
         if not mat_path.is_file():
             raise FileNotFoundError(f"MAT file not found: {mat_path}")
         if len(start_times_ms) != len(end_times_ms):
-            raise ValueError("start_times_ms and end_times_ms must have the same length.")
+            raise ValueError(
+                "start_times_ms and end_times_ms must have the same length."
+            )
 
         out_dir = Path(output_dir) if output_dir else mat_path.parent
         out_dir.mkdir(parents=True, exist_ok=True)
@@ -838,9 +1013,18 @@ class PlotStrWrapper:
 
             logger.info(f"[{i}/{len(avi_files)}] Compressing: {avi.name}")
             cmd = [
-                ffmpeg, "-i", str(avi),
-                "-c:v", "libx264", "-vf", crop, "-crf", str(crf),
-                "-f", "mp4", str(out_path),
+                ffmpeg,
+                "-i",
+                str(avi),
+                "-c:v",
+                "libx264",
+                "-vf",
+                crop,
+                "-crf",
+                str(crf),
+                "-f",
+                "mp4",
+                str(out_path),
             ]
             result = subprocess.run(cmd, capture_output=True, text=True, timeout=3600)
             if result.returncode != 0:
@@ -890,6 +1074,7 @@ class PlotStrWrapper:
             logger.info(f"Extracting: {arc.name}")
             if arc.suffix == ".zip":
                 import zipfile
+
                 with zipfile.ZipFile(str(arc), "r") as zf:
                     zf.extractall(str(out_dir))
             elif arc.suffix == ".7z":
@@ -929,10 +1114,14 @@ class PlotStrWrapper:
         for net_path in network_paths:
             logger.info(f"Copying MF4 from {net_path} -> {dest}")
             cmd = f'robocopy "{net_path}" "{dest}" {file_pattern} /R:1 /W:1'
-            result = subprocess.run(cmd, capture_output=True, text=True, shell=True, timeout=600)
+            result = subprocess.run(
+                cmd, capture_output=True, text=True, shell=True, timeout=600
+            )
             # robocopy: 0-7 = success, >=8 = error
             if result.returncode >= 8:
-                logger.error(f"Robocopy failed (rc={result.returncode}): {result.stderr}")
+                logger.error(
+                    f"Robocopy failed (rc={result.returncode}): {result.stderr}"
+                )
             else:
                 # Find copied files
                 for f in dest.glob(file_pattern):
@@ -993,6 +1182,7 @@ class PlotStrWrapper:
             Filtered list of signal names.
         """
         import re
+
         rules = self.read_selena_filter(filter_name)
 
         includes = []
@@ -1022,7 +1212,9 @@ class PlotStrWrapper:
         for pat in excludes:
             filtered = [s for s in filtered if not re.search(pat, s)]
 
-        logger.info(f"Selena filter '{filter_name}': {len(signal_names)} -> {len(filtered)} signals.")
+        logger.info(
+            f"Selena filter '{filter_name}': {len(signal_names)} -> {len(filtered)} signals."
+        )
         return filtered
 
     # ==================================================================
@@ -1048,36 +1240,68 @@ class PlotStrWrapper:
         if not mat_path.is_file():
             raise FileNotFoundError(f"MAT file not found: {mat_path}")
 
-        data = sio.loadmat(str(mat_path), squeeze_me=True)
+        data, is_hdf5 = self._load_mat(mat_path)
         results = {}
 
-        for sig_name in signal_names:
-            parts = sig_name.split(".", 1)
-            if len(parts) != 2:
-                logger.warning(f"Invalid signal format (need 'Port.Signal'): {sig_name}")
-                continue
-            port_name, field_name = parts
+        try:
+            for sig_name in signal_names:
+                parts = sig_name.split(".", 1)
+                if len(parts) != 2:
+                    logger.warning(
+                        f"Invalid signal format (need 'Port.Signal'): {sig_name}"
+                    )
+                    continue
+                port_name, field_name = parts
 
-            if port_name not in data:
-                logger.warning(f"Port '{port_name}' not found, skipping {sig_name}.")
-                continue
+                if is_hdf5:
+                    if port_name not in data:
+                        logger.warning(
+                            f"Port '{port_name}' not found, skipping {sig_name}."
+                        )
+                        continue
+                    try:
+                        time_arr = (
+                            data[port_name]["time"][:].flatten()
+                            if "time" in data[port_name]
+                            else None
+                        )
+                        values = self._hdf5_resolve_signal(data, port_name, field_name)
+                        results[sig_name] = {"time": time_arr, "values": values}
+                    except KeyError:
+                        logger.warning(
+                            f"Signal '{field_name}' not in port '{port_name}', skipping."
+                        )
+                else:
+                    if port_name not in data:
+                        logger.warning(
+                            f"Port '{port_name}' not found, skipping {sig_name}."
+                        )
+                        continue
+                    port = data[port_name]
+                    if not hasattr(port, "dtype") or port.dtype.names is None:
+                        logger.warning(
+                            f"Port '{port_name}' is not a struct, skipping {sig_name}."
+                        )
+                        continue
+                    if field_name not in port.dtype.names:
+                        logger.warning(
+                            f"Signal '{field_name}' not in port '{port_name}', skipping."
+                        )
+                        continue
+                    time_arr = (
+                        port["time"].item() if "time" in port.dtype.names else None
+                    )
+                    results[sig_name] = {
+                        "time": time_arr,
+                        "values": port[field_name].item(),
+                    }
+        finally:
+            if is_hdf5:
+                data.close()
 
-            port = data[port_name]
-            if not hasattr(port, "dtype") or port.dtype.names is None:
-                logger.warning(f"Port '{port_name}' is not a struct, skipping {sig_name}.")
-                continue
-
-            if field_name not in port.dtype.names:
-                logger.warning(f"Signal '{field_name}' not in port '{port_name}', skipping.")
-                continue
-
-            time_arr = port["time"].item() if "time" in port.dtype.names else None
-            results[sig_name] = {
-                "time": time_arr,
-                "values": port[field_name].item(),
-            }
-
-        logger.info(f"Read {len(results)}/{len(signal_names)} signals from {mat_path.name}.")
+        logger.info(
+            f"Read {len(results)}/{len(signal_names)} signals from {mat_path.name}."
+        )
         return results
 
     def list_ports(self, mat_file_path: str) -> list[str]:
@@ -1093,14 +1317,22 @@ class PlotStrWrapper:
         if not mat_path.is_file():
             raise FileNotFoundError(f"MAT file not found: {mat_path}")
 
-        data = sio.loadmat(str(mat_path), squeeze_me=True)
-        ports = []
-        for key, val in data.items():
-            if key.startswith("__") or key in _RESERVED_FIELDS:
-                continue
-            if hasattr(val, "dtype") and val.dtype.names:
-                ports.append(key)
-        return sorted(ports)
+        data, is_hdf5 = self._load_mat(mat_path)
+        try:
+            if is_hdf5:
+                ports = self._hdf5_get_port_names(data)
+            else:
+                ports = []
+                for key, val in data.items():
+                    if key.startswith("__") or key in _RESERVED_FIELDS:
+                        continue
+                    if hasattr(val, "dtype") and val.dtype.names:
+                        ports.append(key)
+                ports.sort()
+        finally:
+            if is_hdf5:
+                data.close()
+        return ports
 
     def get_time_span(self, mat_file_path: str) -> tuple[float, float]:
         """Get the time span (min, max) in milliseconds from a distilled MAT file.
@@ -1111,18 +1343,42 @@ class PlotStrWrapper:
         if not mat_path.is_file():
             raise FileNotFoundError(f"MAT file not found: {mat_path}")
 
-        data = sio.loadmat(str(mat_path), squeeze_me=True)
         import numpy as np
+
         t_min, t_max = np.inf, -np.inf
 
-        for key, val in data.items():
-            if key.startswith("__") or key in _RESERVED_FIELDS:
-                continue
-            if hasattr(val, "dtype") and val.dtype.names and "time" in val.dtype.names:
-                t = val["time"].item()
-                if t.size > 0:
-                    t_min = min(t_min, float(t.min()))
-                    t_max = max(t_max, float(t.max()))
+        data, is_hdf5 = self._load_mat(mat_path)
+        try:
+            if is_hdf5:
+                for key in data.keys():
+                    if (
+                        key.startswith("#")
+                        or key.startswith("__")
+                        or key in _RESERVED_FIELDS
+                    ):
+                        continue
+                    grp = data[key]
+                    if isinstance(grp, h5py.Group) and "time" in grp:
+                        t = grp["time"][:].flatten()
+                        if t.size > 0:
+                            t_min = min(t_min, float(t.min()))
+                            t_max = max(t_max, float(t.max()))
+            else:
+                for key, val in data.items():
+                    if key.startswith("__") or key in _RESERVED_FIELDS:
+                        continue
+                    if (
+                        hasattr(val, "dtype")
+                        and val.dtype.names
+                        and "time" in val.dtype.names
+                    ):
+                        t = val["time"].item()
+                        if t.size > 0:
+                            t_min = min(t_min, float(t.min()))
+                            t_max = max(t_max, float(t.max()))
+        finally:
+            if is_hdf5:
+                data.close()
 
         return (t_min, t_max)
 
@@ -1153,7 +1409,9 @@ class PlotStrWrapper:
 
         if result.returncode != 0:
             logger.error(f"MATLAB failed (rc={result.returncode}): {result.stderr}")
-            raise RuntimeError(f"MATLAB error (rc={result.returncode}): {result.stderr}")
+            raise RuntimeError(
+                f"MATLAB error (rc={result.returncode}): {result.stderr}"
+            )
 
         logger.debug(f"MATLAB stdout (first 500 chars): {result.stdout[:500]}")
         return result.stdout

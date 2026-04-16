@@ -3,6 +3,8 @@
 Provides a CLI interface to start the agent workflow.
 """
 
+from __future__ import annotations
+
 import sys
 from pathlib import Path
 

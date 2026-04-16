@@ -3,6 +3,8 @@
 Generates preliminary PowerPoint and final PDF reports from analysis results.
 """
 
+from __future__ import annotations
+
 from pathlib import Path
 from typing import Any
 

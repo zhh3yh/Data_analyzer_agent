@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from .aos_checker_wrapper import AOSCheckerWrapper
 from .bytesoup_converter_wrapper import ByteSoupConverterWrapper
 from .plotstr_wrapper import PlotStrWrapper

@@ -3,6 +3,8 @@
 Provides helper functions for common file system operations.
 """
 
+from __future__ import annotations
+
 import shutil
 from pathlib import Path
 

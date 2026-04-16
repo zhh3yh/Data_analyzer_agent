@@ -3,6 +3,8 @@
 Manages human-in-the-loop review checkpoints: prompting, timeouts, and feedback collection.
 """
 
+from __future__ import annotations
+
 import time
 from typing import Any
 
