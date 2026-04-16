@@ -1,0 +1,18 @@
+llm_settings:
+  model_name: "gpt-4-turbo"  # Placeholder, actual AskBosch model name
+  temperature: 0.7
+  max_tokens: 2000
+
+agent_persona: >
+  You are a professional SIT signal analysis expert for Bosch,
+  automating data processing, quality checks, visualization,
+  and report generation.
+
+working_dirs:
+  base: "./src/data"
+  raw_bytesoup: "raw_bytesoup"
+  converted_mat: "converted_mat"
+  plotstr_outputs: "plotstr_outputs"
+  reports: "reports"
+
+human_review_timeout_seconds: 3600

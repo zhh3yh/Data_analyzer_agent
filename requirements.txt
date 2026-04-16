@@ -1,0 +1,16 @@
+# Data Analyzer Agent – Python Dependencies
+
+openai>=1.0.0
+python-dotenv>=1.0.0
+pyyaml>=6.0
+python-pptx>=0.6.21
+reportlab>=4.0
+langchain>=0.1.0
+pydantic>=2.0
+click>=8.1
+loguru>=0.7
+scipy>=1.11
+numpy>=1.24
+watchdog>=3.0
+pytest>=7.0
+# matlab-engine  # Uncomment if PlotStr MATLAB engine integration is needed

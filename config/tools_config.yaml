@@ -1,0 +1,25 @@
+plotstr:
+  plotstr_root: "${PLOTSTR_ROOT}" # Root of PlotStr MATLAB source tree (contains ps.m)
+  matlab_executable: "matlab" # Path or alias to MATLAB executable
+  mdf_exporter_path: "${MDF_EXPORTER_PATH}" # Path to mdf-exporter tool (for MF4)
+  mdf_exporter_conda_env: "mdf-exporter"
+  regex_path: "" # Regex file for MF4 signal filtering
+  replacement_list_path: "" # Signal-name replacement list
+  output_dir: "src/data/plotstr_outputs"
+  config_dir: "" # PlotStr JSON config (empty = use default)
+  max_parallel_jobs: 4 # Max parallel MATLAB distill workers (≤ 6)
+
+robocopy:
+  path: "robocopy.exe" # Windows built-in
+  default_flags: "/COPYALL /DCOPY:T /E /R:1 /W:1"
+
+bytesoup_converter:
+  path: "${BYTESOUP_CONVERTER_PATH}"
+  output_format: "mat"
+
+aos_checker:
+  path: "${AOS_CHECKER_PATH}"
+  default_checks:
+    - "signal_range"
+    - "signal_continuity"
+    - "timestamp_validity"
