@@ -1,5 +1,5 @@
 llm_settings:
-  model_name: "gpt-4-turbo"  # Placeholder, actual AskBosch model name
+  model_name: "gpt-4-turbo" # Placeholder, actual AskBosch model name
   temperature: 0.7
   max_tokens: 2000
 
@@ -12,7 +12,7 @@ working_dirs:
   base: "./src/data"
   raw_bytesoup: "raw_bytesoup"
   converted_mat: "converted_mat"
-  plotstr_outputs: "plotstr_outputs"
-  reports: "reports"
+  rerun_outputs: "rerun_outputs"
+  reports: "reports"r
 
 human_review_timeout_seconds: 3600

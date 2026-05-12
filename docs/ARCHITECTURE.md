@@ -24,7 +24,7 @@ The Data Analyzer Agent is a modular Python application that orchestrates variou
 
 ### 4. Tools (`src/tools/`)
 
-- **PlotStr Wrapper**: Interface to the PlotStr visualization tool (compiled MATLAB).
+- **Rerun Visualizer**: Interface to the [Rerun](https://github.com/rerun-io/rerun) visualization toolkit for time-series and multimodal signal data.
 - **Robocopy Wrapper**: Manages data downloads from network shares.
 - **ByteSoup Converter Wrapper**: Converts raw data to MAT format.
 - **AOS Checker Wrapper**: Runs automated quality checks.
@@ -50,8 +50,8 @@ MAT Files (src/data/converted_mat/)
         v  [AOS Checker]
 Quality Report
         |
-        v  [PlotStr Wrapper]
-Visualization Outputs (src/data/plotstr_outputs/)
+        v  [Rerun Visualizer]
+Visualization Outputs (src/data/rerun_outputs/)
         |
         v  [Report Generator]
 Final Reports (src/data/reports/)

@@ -20,13 +20,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY src/ ./src/
 COPY config/ ./config/
 
-# Placeholder: MATLAB Runtime installation
-# The MATLAB Runtime is large (~2 GB) and is typically installed on the host
-# or provided as a sidecar service.  Uncomment and adapt if needed.
-# RUN mkdir -p /opt/matlab && \
-#     wget -q <MATLAB_RUNTIME_URL> -O /tmp/mcr.zip && \
-#     unzip /tmp/mcr.zip -d /opt/matlab && \
-#     rm /tmp/mcr.zip
+
 
 # Entry point
 ENTRYPOINT ["python", "-m", "src.main"]

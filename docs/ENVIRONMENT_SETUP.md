@@ -28,14 +28,6 @@ git config --global user.name "Your Name"
 git config --global user.email "your.email@bosch.com"
 ```
 
-### MATLAB Runtime (if needed)
-
-If using PlotStr with MATLAB engine mode:
-
-1. Download MATLAB Runtime R2023a from the Bosch internal software catalog.
-2. Install to `C:\Program Files\MATLAB\R2023a\runtime`.
-3. Add the runtime path to your system PATH.
-
 ## Project Setup
 
 ### 1. Clone the Repository
@@ -60,8 +52,6 @@ cp .env.example .env
 Edit `.env` with your specific paths and API keys:
 
 - `BOSCH_ASKBOSCH_API_KEY`: Your AskBosch API key
-- `MATLAB_RUNTIME_PATH`: Path to MATLAB Runtime
-- `PLOTSTR_EXECUTABLE_PATH`: Path to compiled PlotStr executable
 
 ### 4. Verify Installation
 

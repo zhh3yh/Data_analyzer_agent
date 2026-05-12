@@ -2,14 +2,14 @@
 
 ## Overview
 
-An LLM-powered Agent for automated SIT signal analysis within Bosch. The Agent handles data download, conversion, quality checks, visualization (using PlotStr), and report generation, with a human-in-the-loop for review.
+An LLM-powered Agent for automated SIT signal analysis within Bosch. The Agent handles data download, conversion, quality checks, visualization (using Rerun), and report generation, with a human-in-the-loop for review.
 
 ## Features
 
 - **Automated Data Download**: Uses Robocopy to retrieve raw ByteSoup data from network shares.
 - **Data Conversion**: Converts raw ByteSoup data to MAT format for analysis.
 - **Quality Checks**: Automated AOS quality checks on signal data.
-- **Visualization**: Leverages the PlotStr tool for signal plotting and interactive review.
+- **Visualization**: Leverages the [Rerun](https://github.com/rerun-io/rerun) toolkit for signal plotting and interactive review.
 - **Report Generation**: Generates preliminary (PPTX) and final (PDF) reports.
 - **Human-in-the-Loop**: Supports human review at critical decision points.
 

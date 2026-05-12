@@ -22,8 +22,8 @@ python src/main.py analyze --file <path_to_mat_file>
 1. **Data Loading**: The agent loads the specified MAT file.
 2. **Quality Check**: Automated AOS quality checks are executed.
 3. **Signal Analysis**: The LLM analyzes signal characteristics.
-4. **Visualization**: PlotStr generates signal plots.
-5. **Human Review** (optional): The PlotStr GUI is launched for manual review.
+4. **Visualization**: Rerun logs signal data for inspection.
+5. **Human Review** (optional): The Rerun viewer is launched for manual review.
 6. **Report Generation**: A report is generated with findings and visualizations.
 
 ## Examples
@@ -44,4 +44,4 @@ python src/main.py analyze --file data.mat --config my_config.yaml
 
 - Ensure all paths in `.env` are correctly configured.
 - Check `logs/agent.log` for detailed error information.
-- Verify MATLAB Runtime is installed if using PlotStr with MATLAB engine mode.
+- Ensure `rerun-sdk` is installed (see `requirements.txt`) and the Rerun viewer is reachable for interactive review.

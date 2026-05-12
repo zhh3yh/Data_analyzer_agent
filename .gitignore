@@ -33,9 +33,6 @@ logs/
 *.mf4
 *.raw
 
-# PlotStr MATLAB source (external dependency, managed separately)
-plotstr/
-
 # OS files
 Thumbs.db
 .DS_Store
